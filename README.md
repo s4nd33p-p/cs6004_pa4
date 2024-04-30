@@ -1,4 +1,4 @@
-Instructions to Run:
+## Instructions to Run:
 1. cd cs6004 pa4/testcases/Test1
 2. javac -g Test1.java
 3. Update dir = ”./testcases/Test1” variable inside PA4.java
