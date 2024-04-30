@@ -2,6 +2,7 @@ import java.util.*;
 import soot.*;
 import soot.SootMethod;
 import soot.jimple.AnyNewExpr;
+import soot.jimple.Constant;
 import soot.jimple.internal.JAssignStmt;
 import soot.jimple.internal.JNewExpr;
 import soot.jimple.internal.JimpleLocal;
@@ -59,9 +60,45 @@ class points_to_graph{
 	//Below HashMap stores graph as an adjacency list, 
 	//where key is Vertex and Value will be a vector of pairs(object,label).
 	Map<String, Set<Pair<String,String>>> AdjList = new HashMap<>();
+	Map<String,Integer> useCount = new HashMap<>();
+	Map<String,Set<Unit>> AllocateUnits = new HashMap<>();
+	Set<Unit> ToRemove = new HashSet<>();
+	UnitGraph CFG;
 	//    Map<String, Set<Pair<String,String>>> Adj2 = new HashMap<>();
 	//edge is of form e.u --> e.v 
 	// e.u is the key to the Adjlist and {...,e.v}
+	points_to_graph(UnitGraph CFG) {
+		this.CFG=CFG;
+	}
+    boolean isInteger(String str) {
+        try {
+            // Attempt to parse the string as an integer
+            Integer.parseInt(str);
+            // If parsing succeeds, return true
+            return true;
+        } catch (NumberFormatException e) {
+            // If parsing fails (NumberFormatException), return false
+            return false;
+        }
+    }
+    Set<String> reachableVertices(String startVertex) {
+        Set<String> visited = new HashSet<>();
+        dfs(startVertex, visited);
+        return visited;
+    }
+
+    void dfs(String vertex, Set<String> visited) {
+        visited.add(vertex);
+        Vector<String> neighbors = this.GetPointsToList(vertex);
+        if(neighbors != null) {
+        for (String neighbor : neighbors) {
+            String nextVertex = neighbor;
+            if (!visited.contains(nextVertex)) {
+                dfs(nextVertex, visited);
+            }
+        }
+        }
+    }
 	void AddEdge(edge e)
 	{
 		Vertices.add(e.u);
@@ -71,19 +108,69 @@ class points_to_graph{
 			Set<Pair<String,String>> temp=AdjList.get(e.u);
 			temp.add(new Pair<String,String>(e.v,e.label));
 			AdjList.put(e.u, temp);
+			Set <String> reachables = new HashSet<>();
+			reachables = this.reachableVertices(e.u);
+//			if(e.u.equals("ret_escape") || e.u.equals("param_escape")) {
+//				reachables=this.reachableVertices(e.v);
+//			}
+//			reachables.addAll(new HashSet<String>(reachableVertices(e.v)));
+			if(!reachables.isEmpty()) {
+				for(String node: reachables) {
+					if(this.isInteger(node)) {
+//						System.out.println(e.u+" to "+e.v);
+						if(useCount.containsKey(node)) {
+							useCount.put(node, useCount.get(node) + 1);
+						}
+						else {
+							useCount.put(node, 1);
+						}
+					}
+				}
+			}
 		}
 		else
 		{
 			Set<Pair<String,String>> temp=new HashSet<Pair<String,String>>();
 			temp.add(new Pair<String,String>(e.v,e.label));
 			AdjList.put(e.u,temp);
+			if(this.isInteger(e.v)) {
+//				System.out.println(e.u+" to "+e.v);
+				if(useCount.containsKey(e.v)) {
+					useCount.put(e.v, useCount.get(e.v) + 1);
+				}
+				else {
+					useCount.put(e.v, 1);
+				}
+			}
+			if(this.isInteger(e.u)) {
+//				System.out.println(e.u+" to "+e.v);
+				if(useCount.containsKey(e.u)) {
+					useCount.put(e.u, useCount.get(e.u) + 1);
+				}
+				else {
+					useCount.put(e.u, 1);
+				}
+			}
 		}
 		//            System.out.println("label inside create edge"+e.label);
 		
 
 	}
 
-
+	void printReferenceCount() {
+		if(!useCount.isEmpty()) {
+		for (Map.Entry<String, Integer> entry : useCount.entrySet()) {
+            String key = entry.getKey();
+            Integer value = entry.getValue();
+//            System.out.println(key + " --> " + value);
+            if(value==1) {
+            	this.ToRemove.addAll(this.AllocateUnits.get(key));
+            	System.out.println(key + " --> " + value);
+//            	this.ToRemove.add(this.AllocateUnits.get(key))
+            }
+        }
+		}
+	}
 	void DeleteEdge(edge e)
 	{
 		Vector<Pair<String,String>> temp = new Vector<Pair<String,String>>();
@@ -267,6 +354,7 @@ class points_to_graph{
 			Value lhs= stmt.getLeftOp();
 			int LineNumber=u.getJavaSourceStartLineNumber();
 //			            System.out.println(u.toString());
+			
 			if( rhs instanceof JStaticInvokeExpr)
 			{
 //				System.out.println(rhs);
@@ -356,8 +444,22 @@ class points_to_graph{
 				try {				
 					if(lhs instanceof JimpleLocal || lhs instanceof RValueBox)
 					{
-						edge e = new edge(lhs.toString(),Integer.toString(LineNumber));
-						this.AddEdge(e);             
+								
+				                edge e = new edge(lhs.toString(), Integer.toString(LineNumber));
+				                this.AddEdge(e);
+				                Set<Unit> temp=new HashSet<>();
+				                Iterator<Unit> itr = this.CFG.iterator();
+				                while(itr.hasNext()) {
+				                	if(itr.next().equals(u)) {
+				                		temp.add(itr.next());
+				                		break;
+				                		
+				                	}
+				                }
+				                temp.add(u);
+//				                temp.add(itr.next());
+				                this.AllocateUnits.put(e.v, temp);
+				            
 					}
 
 				} catch (Exception e) {
@@ -389,6 +491,7 @@ class points_to_graph{
 				try {
 					if(lhs instanceof JInstanceFieldRef) // $r0.f = $r1 need to add $r0.f--> $r1
 					{
+//						System.out.println(u);
 						JInstanceFieldRef fref=(JInstanceFieldRef)lhs;
 						Vector<String> lhslist=this.GetPointsToList(fref.getBase().toString());
 						
@@ -401,7 +504,7 @@ class points_to_graph{
 								{
 									for(String rpair:rhslist)
 									{
-
+//										System.out.println(lpair+"to"+rpair);
 										edge e= new edge( lpair,rpair,fref.getField().toString());
 										this.AddEdge(e);
 									}
@@ -523,16 +626,22 @@ class points_to_graph{
 class WorkingList{
 
 	Queue<Unit> worklistqueue;
+	Set<Unit> visitedUnits;
 
 	WorkingList()
 	{
 		this.worklistqueue = new LinkedList<>();
+		this.visitedUnits = new HashSet<>();
 
 	}
 
 	void AppendToWL(Unit u)
 	{
-		worklistqueue.offer(u);
+        if (!visitedUnits.contains(u)) { // Check if the unit has been visited before
+            worklistqueue.offer(u);
+            visitedUnits.add(u); // Mark the unit as visited
+        }
+
 	}
 
 	Unit getNextFromWL()
@@ -561,9 +670,10 @@ public class AnalysisTransformer extends BodyTransformer {
 		// Unit or Node . Fixed point logic should be there . stop when out-graph does not change.
 		// Then perform Your analysis on the Graph to find escaping variables.
 		//JInvoke corresponds to a function call, we can get parameters there.
-		points_to_graph PGraph = new points_to_graph();
 		UnitGraph CFG= new BriefUnitGraph(body);
 		WorkingList  wl = new WorkingList();
+		points_to_graph PGraph = new points_to_graph(CFG);
+
 		for(Unit startunit: body.getUnits())
 		{
 			
@@ -576,16 +686,16 @@ public class AnalysisTransformer extends BodyTransformer {
 			Unit curr_unit = wl.getNextFromWL();
 //			System.out.println(curr_unit);
 			boolean modified= PGraph.TransformPointsToGraph(curr_unit);
-			if(modified)
-			{
-				if(CFG.getSuccsOf(curr_unit)!= null)
-				{
-					for( Unit succ_unit : CFG.getSuccsOf(curr_unit))
-					{
-						wl.AppendToWL(succ_unit);
-					}
-				}
-			}
+//			if(modified)
+//			{
+//				if(CFG.getSuccsOf(curr_unit)!= null)
+//				{
+//					for( Unit succ_unit : CFG.getSuccsOf(curr_unit))
+//					{
+//						wl.AppendToWL(succ_unit);
+//					}
+//				}
+//			}
 
 		}
 		// Printing Points to information
@@ -594,7 +704,16 @@ public class AnalysisTransformer extends BodyTransformer {
 //			PGraph.printadjlist(s);
 //			System.out.println();
 //		}
+		PGraph.printReferenceCount();
 
+		// Remove the units after the iteration is complete
+		for (Unit u : PGraph.ToRemove) {
+//			System.out.println(u+" removed");
+//			CFG.getSuccsOf(u).get(0);
+		    body.getUnits().remove(u);
+		}
+
+//
 		Vector<String> escaping_vars = new Vector<String>();
 		escaping_vars.add(new String("param_escape"));
 		escaping_vars.add(new String("ret_escape"));
@@ -603,7 +722,8 @@ public class AnalysisTransformer extends BodyTransformer {
 
 		for( String var: escaping_vars)
 		{
-			//        	final_escaping.add(var);
+//			        	final_escaping.add(var);
+			
 			Vector<String> escaping_objs = PGraph.GetPointsToList(var);
 			if( escaping_objs != null)
 			{
@@ -613,8 +733,12 @@ public class AnalysisTransformer extends BodyTransformer {
 			}
 
 		}
-
-		all_methods.put(body.getMethod().getDeclaringClass()+":"+body.getMethod().getName().toString(),PGraph.final_escaping);
+		for(String s:PGraph.final_escaping) {
+//			System.out.println(s);
+			PGraph.useCount.put(s, PGraph.useCount.get(s)+1);
+		}
+//		
+//		all_methods.put(body.getMethod().getDeclaringClass()+":"+body.getMethod().getName().toString(),PGraph.final_escaping);
 		
 	}
 	
